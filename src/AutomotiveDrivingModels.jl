@@ -4,14 +4,20 @@ using Printf
 using LinearAlgebra
 using Parameters
 using StaticArrays
-using Distributions
 using Reexport
-
-using Random
-using JuMP
 
 @reexport using Vec
 @reexport using Records
+
+@reexport using AutoViz
+@reexport using Distributions
+@reexport using Interact
+
+using Random
+using JuMP
+using Ipopt
+
+
 
 # Roadways
 include("roadways/straight_1d_roadways.jl")
@@ -281,7 +287,8 @@ export
     BafflingDriver,
     BafflingLongitudinalTracker,
     BafflingLaneChanger,
-    MpcSganMonteDriver
+    MpcSganMonteDriver,
+    set_other_models!
 
     include("behaviors/lane_following_drivers.jl")
     include("behaviors/princeton_driver.jl")

@@ -1,3 +1,19 @@
+# module MPCsganMonteDriver
+#
+# using Random
+# using JuMP
+# using Reexport
+# @reexport using AutomotiveDrivingModels
+# @reexport using AutoViz
+# @reexport using Distributions
+# @reexport using Interact
+#
+# export
+#     MpcSganMonteDriver,
+#     set_desired_speed!,
+#     set_other_models!,
+#     rand
+
 """
 Speed limit: 15m/s​
  (The average speed in dense traffic will be less than 10m/s)​
@@ -37,6 +53,10 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
     v_des::Float64
     a::Float64
     δ::Float64
+    height::Float64
+    width::Float64
+    models::Dict{Int, DriverModel}
+    thred_safety::Float64
 
     function MpcSganMonteDriver(
         timestep::Float64;
@@ -44,8 +64,8 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         rec::SceneRecord = SceneRecord(1, timestep),
         δ_max::Float64 = 0.6,
         δ_min::Float64 = -0.4,
-        a_max::Float64 = 3.0,
-        a_min::Float64 = -3.0,
+        a_max::Float64 = 3.5,
+        a_min::Float64 = -4.0,
         N_sim::Float64 = 500.0,
         T::Float64 = 0.2,
         ΔT::Float64 = timestep,
@@ -53,13 +73,16 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         T_pred::Float64 = 2.0,
         Δa_max::Float64 = 5.0,
         Δδ_max::Float64 = 0.6,
-        λ_v::Float64 = 10.0,
+        λ_v::Float64 = 1.0,
         λ_div::Float64 = 10e2+0.0,
         λ_δ::Float64 = 1.0,
         λ_a::Float64 = 1.0,
         λ_Δδ::Float64 = 3.0,
         λ_Δa::Float64 = 1.0,
-        v_des::Float64 = 30.0)
+        height::Float64 = 4.0,
+        width::Float64 = 1.8,
+        v_des::Float64 = 30.0,
+        thred_safety::Float64 = 0.5)
 
         retval = new()
 
@@ -83,73 +106,123 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         retval.λ_Δδ = λ_Δδ
         retval.λ_Δa = λ_Δa
         retval.v_des = v_des
-        retval.a = NaN
-        retval.δ = NaN
+        retval.a = a_min
+        retval.δ = 0
+        retval.height = height
+        retval.width = width
+        retval.models = Dict{Int64,DriverModel}()
+        retval.thred_safety = thred_safety
 
         retval
     end
 end
+
 get_name(::MpcSganMonteDriver) = "MpcSganMonteDriver"
 function set_desired_speed!(model::MpcSganMonteDriver, v_des::Float64)
     model.v_des = v_des
     model
 end
+
+function set_other_models!(model::MpcSganMonteDriver, models::Dict{Int, DriverModel})
+    model.models = models
+    model
+end
+
+"""
+    observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, egoid::Int)
+
+(1) randomly generates a sequence of control inputs (acceleration and steering angle)
+(2) evaluates Social GAN to predict motions of neighboring vehicles within a range
+(3) checks the safety constraint at each time step
+(4) evalautes the cumulative cost over the receding time horizon T
+(5) finds the optimal pair of control inputs
+"""
 function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, egoid::Int)
     # δ_max,δ_min,a_max,a_min,N_sim,T,ΔT,T_obs,T_pred,Δa_max,Δδ_max=0.6,-0.4,3.0,-3.0,1000,4,0.5,2,2,5,0.6
 
     update!(model.rec, scene)
     observe!(model.mlane, scene, roadway, egoid) # receive lane change action from higher level decision maker
+    # global y_ref = DEFAULT_LANE_WIDTH * lane_change_action.dir
+    global y_ref = -1*DEFAULT_LANE_WIDTH
 
-    vehicle_index = findfirst(egoid, scene)
+    # check how many simulated steps we have
+    n_steps = 0
+    for t in 1 : model.rec.nframes
+        n_steps += 1
+        if length(model.rec.frames[t]) == 0
+            break
+        end
+    end
+    model.T_obs = trunc(Int, min(n_steps*model.ΔT, model.T_obs))
+
+    # Local variables
+    N_receding = trunc(Int, model.T/model.ΔT)
+    N_sgan_obs = trunc(Int, model.T_obs/model.ΔT)
+    N_sgan_pred = trunc(Int, model.T_pred/model.ΔT)
+    ind_ego = findfirst(egoid, scene)
     lane_change_action = rand(model.mlane)
 
-    a_seq, δ_seq = gen_rand_inputs(model)
+    # generate sequences of control inputs
+    a_seq, δ_seq = gen_rand_inputs(model, y_ref)
 
     cost_min = Inf
-    global y_ref = -DEFAULT_LANE_WIDTH # TEMP middle lane
+    n_opt = -1
+    model.a = model.a_min
+    # model.δ = -scene[ind_ego].state.posG.θ
+    model.δ = 0
     for n = 1 : model.N_sim
+        println("n: ",n)
+
         # initialize the vehicle object
-        ego_veh = scene[vehicle_index] # Entity{VehicleStateBuffer,BicycleModel,Int}
+        ego_veh = scene[ind_ego] # Entity{VehicleStateBuffer,BicycleModel,Int}
 
         # initialize the vehicle object for the other vehicles
-        indices_near_vehs = get_indices_near_vehs(vehicle_index, scene)
+        ind_near_vehs = get_indices_near_vehs(ind_ego, scene, 15.0)
+        # println(ind_near_vehs)
+        # print(ind_near_vehs)
 
-        # vehs = Array{Entity{VehicleState, BicycleModel, Int}}
-        # v
-        # push!(vehs,ego_veh) # push the vehicle object of thewatch -n 1 nvidia-smi ego vehicle.
-        # indices_other_vehs = [] # index of the other vehicles
-        # for i in indices_other_vehs
-        #     vehᵢ = scene[i]
-        #     push!(vehs,vehᵢ)
-        # end
+        # initialize the record scene queue
+        rec′ = SceneRecord(N_receding, model.ΔT)
+        for k = 1 : N_sgan_obs
+            update!(rec′,rec[-N_sgan_obs + k])
+        end
 
         # randomly sample the sequence of control
         a_ = a_seq[1:end,rand(1:size(a_seq,2))]
         δ_ = δ_seq[1:end,rand(1:size(δ_seq,2))]
 
+        # initialize the scene with the recent one
+        scene′= Scene()
+        for i = 1 : length(scene)
+            push!(scene′,scene[i])
+        end
+
         # evaluate the control sequences
         cost_n = 0
-        for ℓ = 1 : size(a_seq,1)
-            # global cost_n
+        for ℓ = 1 : N_receding
+            println("ℓ: ", ℓ)
             # (1) predict other drivers' motion (SGAN) (for the next step)
-            # if length(vehs) > 1
-            #     predict!(vehs)
-            # end
+            if length(ind_near_vehs) >= 1
+                scene′ = propagate_other_vehs(Any, ind_ego, model, scene′, roadway, rec′)
+            end
 
             # (2) update the vehicle states with a,δ
             a,δ = a_[ℓ],δ_[ℓ]
+            println("try a = ",a, ", δ = ", δ)
             state′ = propagate(ego_veh, AccelSteeringAngle(a,δ), roadway, model.ΔT)
             ego_veh = Entity(state′, ego_veh.def, ego_veh.id)
+            scene′[ind_ego] = ego_veh
+            update!(rec′,scene′)
 
             # (3) check the feasibility (break if violated)
-            # - input the current positions of the vehicles
-            # - compute the minimum distance between vehicles: skip if distance < 0, otherwise continue
-            # if length(vehs) > 1
-            #     isSafe(vehs) ? true : break
-            # end
+            if length(ind_near_vehs) >= 1
+                if !isSafe(model, ind_ego, ind_near_vehs, scene′)
+                    cost_n = Inf
+                    break
+                end
+            end
 
             # (4) compute the cumulative costs
-
             # TODO: update the cost function with lane angle (currently assumed there's no angle)
             # TODO: get the reference y coordinate
             a_prev = ℓ == 1 ? 0 : a_[ℓ-1]
@@ -162,17 +235,17 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
                     + model.λ_Δδ*(δ-δ_prev)^2
                     + model.λ_Δa*(a-a_prev)^2)
         end
+
         if cost_n < cost_min
             # update with the optimal control sequence
             cost_min = cost_n
             model.a = a_[1]
             model.δ = δ_[1]
+            n_opt = n
         end
     end
 
-    if abs(scene[vehicle_index].state.posG.y-y_ref) <= 0.05
-        model.δ = 0.0
-    end
+    println("optimal controls (n = ", n_opt,") : a = ",model.a, ", δ = ", model.δ)
     model
 end
 
@@ -182,23 +255,23 @@ end
 
 find indices of near vehicles around the ego vehicle
 """
-function get_indices_near_vehs(vehicle_index::Integer, scene::Scene; range::Float64 = 5)
-    ego_veh = scene[vehicle_index]
+function get_indices_near_vehs(ind_ego::Int, scene::Scene, range::Float64)
+    ego_veh = scene[ind_ego]
     x = ego_veh.state.posG.x
     y = ego_veh.state.posG.y
-    indices_near_vehs = []
+    ind_near_vehs = []
     for i in 1 : length(scene)
-        if i == vehicle_index
+        if i == ind_ego
             continue
         end
         xᵢ = scene[i].state.posG.x
         yᵢ = scene[i].state.posG.y
         if sqrt((x-xᵢ)^2+(y-yᵢ)^2) <= range
-            append!(indices_near_vehs, i)
+            append!(ind_near_vehs, i)
         end
     end
 
-    return indices_near_vehs
+    return ind_near_vehs
 end
 
 
@@ -208,7 +281,7 @@ end
 returns randomly generated sequence of a and δ, both of which satisfies the
 maximum rate constraints (jerk, steering rate)
 """
-function gen_rand_inputs(model::MpcSganMonteDriver)
+function gen_rand_inputs(model::MpcSganMonteDriver, y_ref::Float64)
     n_row = trunc(Int,model.T/model.ΔT)
     n_col = trunc(Int,model.N_sim)
 
@@ -243,12 +316,32 @@ function gen_rand_inputs(model::MpcSganMonteDriver)
     return a_seq, δ_seq
 end
 
+"""
+    function propagate(model::MpcSganMonteDriver, ind_near_vehs::Vector{Any}, rec::SceneRecord)
+returns positions of the neighboring vehicles, based on their Driver Model. This is equivalent to the SGAN that is perfectly trained.
+"""
+function propagate_other_vehs(::Type{A}, ind_ego::Int, model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, rec::SceneRecord) where {A}
+    models = Dict{Int, DriverModel}()
+    for i in 1 : length(model.models)
+        if i == ind_ego
+            models[i] = BafflingDriver(rec.timestep)
+        else
+            models[i] = model.models[i]
+        end
+    end
+    actions = Array{A}(undef, length(scene))
+    get_actions!(actions, scene, roadway, models)
+    tick!(scene, roadway, actions, rec.timestep)
+
+    return scene
+end
+
 
 """
-    predict!(vehs::Array{Entity{VehicleState, D, Int}}) where {D}
+    predict(vehs::Array{Entity{VehicleState, D, Int}}) where {D}
 predicts motions of all vehicles within a range, using Social GAN.
 """
-function predict!(vehs::Array{Entity{VehicleState, D, Int}}) where {D}
+function predict(model::MpcSganMonteDriver, ind_near_vehs::Vector{Any}, rec::SceneRecord)
     # TODO: call SGAN function to predict
 
     # arrange input for SGAN
@@ -262,20 +355,23 @@ function predict!(vehs::Array{Entity{VehicleState, D, Int}}) where {D}
     # out = CALL_SGAN_FUNCTION(inp)
 
     # TODO: update vehicle object with the predicted positions
+    return scene
 end
 
 
 """
-    isSafe(ind_ego::Integer, ind_others::Array{Integer}, scene::Scene)
+    isSafe(ind_ego::Int, ind_others::Array{Int}, scene::Scene)
 check collision with any of adjacent vehicles
 """
-function isSafe(ind_ego::Integer, ind_others::Array{Integer}, scene::Scene)
-    veh = scene[ind_ego]
-    ϵ = 10e-5
+function isSafe(model::MpcSganMonteDriver, ind_ego::Int, ind_others::Vector{Any}, scene::Scene)
+    ego_veh = scene[ind_ego]
+    ϵ = model.thred_safety
     for i in ind_others
-        if min_distance(veh, scene[i]) > ϵ
+        println("distance to vehicle ", i, ": ", min_distance(model, ego_veh, scene[i]))
+        if min_distance(model, ego_veh, scene[i]) > ϵ
             continue
         else
+            println("   COLISION DETECTED. actions discarded")
             return false
         end
     end
@@ -292,29 +388,38 @@ end
 
 returns distance between ego vehicle and an adjacent vehicle
 """
-function min_distance(ego::Entity{VehicleState, D, Int},
+function min_distance(model::MpcSganMonteDriver,
+                    ego::Entity{VehicleState, D, Int},
                     other::Entity{VehicleState, D, Int};
-                    type::AbstractString="ellipsoid",
-                    height::Float64=3.0,
-                    width::Float64=1.0) where {D}
+                    type::AbstractString="ellipsoid") where {D}
     # ego: ego vehicle object
     # other: other vehicle object
     x,y,θ = ego.state.posG.x, ego.state.posG.y, ego.state.posG.θ
-    xᵢ,yᵢ,θᵢ = other.state.posG.x, other.state.posG.y, other.state.posG.θᵢ
+    xᵢ,yᵢ,θᵢ = other.state.posG.x, other.state.posG.y, other.state.posG.θ
     # x,y,θ = 0,0,0.5
     # xᵢ,yᵢ,θᵢ = 0,5,0
+    h = model.height/2
+    w = model.width/2
 
     if type == "ellipsoid"
-        model = Model(with_optimizer(Ipopt.Optimizer, print_level=0))
-        @variable(model, x′); @variable(model, y′)
-        @variable(model, xᵢ′); @variable(model, yᵢ′)
-        @objective(model, MOI.MIN_SENSE, (x′-xᵢ′)^2+(y′-yᵢ′)^2)
-        @constraint(model, ((x′-x)*cos(θ) + (y′-y)*sin(θ))^2/(height^2) + ((x′-x)*sin(θ) + (y′-y)*cos(θ))^2/(width^2) <= 1.0)
-        @constraint(model, ((xᵢ′-xᵢ)*cos(θᵢ) + (yᵢ′-yᵢ)*sin(θᵢ))^2/(height^2) + ((xᵢ′-xᵢ)*sin(θᵢ) + (yᵢ′-yᵢ)*cos(θᵢ))^2/(width^2) <= 1.0)
-        optimize!(model)
-        return sqrt(objective_value(model))
+        prob = Model(with_optimizer(Ipopt.Optimizer, print_level=0))
+        @variable(prob, x′); @variable(prob, y′)
+        @variable(prob, xᵢ′); @variable(prob, yᵢ′)
+        @objective(prob, MOI.MIN_SENSE, (x′-xᵢ′)^2+(y′-yᵢ′)^2)
+        @constraint(prob, ((x′-x)*cos(θ) + (y′-y)*sin(θ))^2/(h^2) + ((x′-x)*sin(θ) + (y′-y)*cos(θ))^2/(w^2) <= 1.0)
+        @constraint(prob, ((xᵢ′-xᵢ)*cos(θᵢ) + (yᵢ′-yᵢ)*sin(θᵢ))^2/(h^2) + ((xᵢ′-xᵢ)*sin(θᵢ) + (yᵢ′-yᵢ)*cos(θᵢ))^2/(w^2) <= 1.0)
+        optimize!(prob)
+        # println(objective_value(prob))
+        # if termination_status(prob) == MOI.OPTIMAL
+        #     return max(sqrt(objective_value(prob)))
+        # elseif (termination_status(prob) == MOI.TIME_LIMIT && has_values(prob))
+        #     return max(sqrt(objective_value(prob)), 0)
+        # else
+        #     return -1
+        # end
+        return sqrt(max(objective_value(prob), 0))
     elseif type == "circle"
-        return max(sqrt((x-xᵢ)^2+(y-yᵢ)^2)-2*height, 0)
+        return max(sqrt((x-xᵢ)^2+(y-yᵢ)^2)-2*h, 0)
     else
         error("ERROR: vehicle shape type error. It must be either circle or ellipsoid")
     end
@@ -323,3 +428,5 @@ end
 Base.rand(model::MpcSganMonteDriver) = AccelSteeringAngle(model.a,model.δ)
 # Distributions.pdf(driver::MpcSganMonteDriver, a::AccelSteeringAngle) = pdf(driver.mlat, a.a_lat) * pdf(driver.mlon, a.a_lon)
 # Distributions.logpdf(driver::MpcSganMonteDriver, a::AccelSteeringAngle) = logpdf(driver.mlat, a.a_lat) * logpdf(driver.mlon, a.a_lon)
+
+# end

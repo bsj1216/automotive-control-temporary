@@ -82,42 +82,6 @@ function observe!(model::BafflingLaneChanger, scene::Scene, roadway::Roadway, eg
     rear_L = get_neighbor_rear_along_left_lane(scene, vehicle_index, roadway, VehicleTargetPointFront(), VehicleTargetPointFront(), VehicleTargetPointRear())
     rear_R = get_neighbor_rear_along_right_lane(scene, vehicle_index, roadway, VehicleTargetPointFront(), VehicleTargetPointFront(), VehicleTargetPointRear())
 
-    # model.dir = DIR_MIDDLE
-    # r = Base.rand(Float64)
-    # if fore_M.Δs <= model.threshold_fore # there is a lead vehicle
-    #     veh_M = scene[fore_M.ind]
-    #     speed_M = veh_M.state.v
-    #     lane_change_triggered = speed_M ≤ min(model.v_des, v) # they are driving slower than we want
-    # elseif r <= 0.1 # just randomly triggered with the probability of 0.1
-    #     lane_change_triggered = true
-    # else
-    #     lane_change_triggered = false
-    # end
-    #
-    # if lane_change_triggered
-    #     if fore_M.ind != nothing
-    #         veh_M = scene[fore_M.ind]
-    #         speed_M = veh_M.state.v
-    #         speed_ahead = speed_M
-    #     end
-    #     if right_lane_exists && left_lane_exists &&
-    #         isEnoughSpace(model,fore_R,rear_R) && isEnoughSpace(model,fore_L,rear_L)
-    #         # (rear_R.ind == nothing || scene[rear_R.ind].state.v ≤ v) && # we are faster than any follower
-    #         # (fore_R.ind == nothing || scene[fore_R.ind].state.v > speed_ahead) # lead is faster than current speed
-    #
-    #         r = Base.rand([-1,1])
-    #         model.dir = r # randomly choose one if both lanes exist
-    #         ind = r == DIR_RIGHT ? fore_R.ind : fore_L.ind
-    #         speed_ahead = ind == nothing ? Inf : scene[ind].state.v
-    #     elseif right_lane_exists && isEnoughSpace(model,fore_R,rear_R)
-    #         model.dir, ind = DIR_RIGHT, fore_R.ind
-    #         speed_ahead = ind == nothing ? Inf : scene[ind].state.v
-    #     elseif left_lane_exists && isEnoughSpace(model,fore_L,rear_L)
-    #         model.dir, ind = DIR_LEFT, fore_L.ind
-    #         speed_ahead = ind == nothing ? Inf : scene[ind].state.v
-    #     end
-    # end
-
     model.dir = DIR_MIDDLE
     r = Base.rand(Float64)
     if fore_M.Δs < model.threshold_fore # there is a lead vehicle

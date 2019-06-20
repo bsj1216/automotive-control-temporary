@@ -1,7 +1,7 @@
 """
     get_actions!(actions::Vector{A}, scene::EntityFrame{S,D,I}, roadway::R, models::Dict{I, M},) where {S,D,I,A,R,M<:DriverModel}
 Fill in `actions` with the actions of each agent present in the scene. It calls `observe!`
-and `rand` for each driver models. 
+and `rand` for each driver models.
 `actions` will contain the actions to apply to update the state of each vehicle.
 """
 function get_actions!(
@@ -23,7 +23,7 @@ end
 
 """
     tick!(scene::EntityFrame{S,D,I}, roadway::R, actions::Vector{A}, Δt::Float64) where {S,D,I,A,R}
-update `scene` in place by updating the state of each vehicle given their current action in `actions`. 
+update `scene` in place by updating the state of each vehicle given their current action in `actions`.
 It calls the `propagate` method for each vehicle in the scene.
 """
 function tick!(
@@ -77,6 +77,7 @@ function simulate!(
     actions = Array{A}(undef, length(scene))
 
     for tick in 1 : nticks
+        println("\n\ntick: ", tick)
         get_actions!(actions, scene, roadway, models)
         tick!(scene, roadway, actions, rec.timestep)
         update!(rec, scene)
