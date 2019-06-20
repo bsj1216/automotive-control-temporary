@@ -19,8 +19,8 @@ global i=1
 for j in 1:num_vehs/3
     i = (j-1)*3+1
     push!(scene, Vehicle(VehicleState(VecSE2(0.0+2.0*(i-1),0.0,0.0),roadway,10.0), VehicleDef(),i)); i+=1 # top lane
-    push!(scene, Vehicle(VehicleState(VecSE2(0.0+2.0*(i-2),-DEFAULT_LANE_WIDTH,0.0),roadway,10.0), VehicleDef(),i)); i+=1 # middle lane
-    push!(scene, Vehicle(VehicleState(VecSE2(0.0+2.0*(i-3),-2*DEFAULT_LANE_WIDTH,0.0),roadway,10.0), VehicleDef(),i)); # bottm lane
+    push!(scene, Vehicle(VehicleState(VecSE2(0.0+2.0*(i-1),-DEFAULT_LANE_WIDTH,0.0),roadway,10.0), VehicleDef(),i)); i+=1 # middle lane
+    push!(scene, Vehicle(VehicleState(VecSE2(0.0+2.0*(i-1),-2*DEFAULT_LANE_WIDTH,0.0),roadway,10.0), VehicleDef(),i)); # bottm lane
 end
 
 # Driver models
@@ -30,7 +30,7 @@ for j in 1:num_vehs
     if j == ind_ego
         models[j] = MpcSganMonteDriver(timestep,
                                         N_sim = 50.0,
-                                        T=0.4,
+                                        T=0.6,
                                         λ_div=5000.0,
                                         λ_v=1.0,
                                         λ_δ=1000.0,

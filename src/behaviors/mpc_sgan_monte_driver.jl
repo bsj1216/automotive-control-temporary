@@ -57,6 +57,7 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
     width::Float64
     models::Dict{Int, DriverModel}
     thred_safety::Float64
+    isDebugMode::Bool
 
     function MpcSganMonteDriver(
         timestep::Float64;
@@ -82,7 +83,8 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         height::Float64 = 4.0,
         width::Float64 = 1.8,
         v_des::Float64 = 30.0,
-        thred_safety::Float64 = 0.5)
+        thred_safety::Float64 = 0.5,
+        isDebugMode::Bool = false)
 
         retval = new()
 
@@ -112,6 +114,7 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         retval.width = width
         retval.models = Dict{Int64,DriverModel}()
         retval.thred_safety = thred_safety
+        retval.isDebugMode = isDebugMode
 
         retval
     end
@@ -171,7 +174,7 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
     # model.δ = -scene[ind_ego].state.posG.θ
     model.δ = 0
     for n = 1 : model.N_sim
-        println("n: ",n)
+        model.isDebugMode? println("n: ",n) : nothing
 
         # initialize the vehicle object
         ego_veh = scene[ind_ego] # Entity{VehicleStateBuffer,BicycleModel,Int}
@@ -200,7 +203,7 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
         # evaluate the control sequences
         cost_n = 0
         for ℓ = 1 : N_receding
-            println("ℓ: ", ℓ)
+            model.isDebugMode? println("ℓ: ", ℓ) : nothing
             # (1) predict other drivers' motion (SGAN) (for the next step)
             if length(ind_near_vehs) >= 1
                 scene′ = propagate_other_vehs(Any, ind_ego, model, scene′, roadway, rec′)
@@ -208,7 +211,7 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
 
             # (2) update the vehicle states with a,δ
             a,δ = a_[ℓ],δ_[ℓ]
-            println("try a = ",a, ", δ = ", δ)
+            model.isDebugMode? println("try a = ",a, ", δ = ", δ) : nothing
             state′ = propagate(ego_veh, AccelSteeringAngle(a,δ), roadway, model.ΔT)
             ego_veh = Entity(state′, ego_veh.def, ego_veh.id)
             scene′[ind_ego] = ego_veh
@@ -245,7 +248,7 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
         end
     end
 
-    println("optimal controls (n = ", n_opt,") : a = ",model.a, ", δ = ", model.δ)
+    model.isDebugMode? println("optimal controls (n = ", n_opt,") : a = ",model.a, ", δ = ", model.δ) : nothing
     model
 end
 
