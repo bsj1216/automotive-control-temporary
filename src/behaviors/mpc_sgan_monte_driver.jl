@@ -1,33 +1,15 @@
-# module MPCsganMonteDriver
-#
-# using Random
-# using JuMP
-# using Reexport
-# @reexport using AutomotiveDrivingModels
-# @reexport using AutoViz
-# @reexport using Distributions
-# @reexport using Interact
-#
-# export
-#     MpcSganMonteDriver,
-#     set_desired_speed!,
-#     set_other_models!,
-#     rand
-
 """
-Speed limit: 15m/s​
- (The average speed in dense traffic will be less than 10m/s)​
+MpcSganMonteDriver
+Driver that randomly changes lanes and speeds.
 
-Acceleration limits: -4m/s^2 to 3.5 m/s^2​
- (Same Range might be used for other cars on the roamodel. The consequence is that IDM might become a little bit more aggressive. For other cars, a lower max acceleration (~2m/s^2) will result in smoother actions)​
+# Constructors
+BafflingDriver(timestep::Float64;mlon::LaneFollowingDriver=IntelligentDriverModel(), mlat::LateralDriverModel=ProportionalLaneTracker(), mlane::LaneChangeModel=RandLaneChanger(timestep),rec::SceneRecord = SceneRecord(1, timestep))
 
-Jerk Limits:​
-·       Acc >0 (while accelerating):  -20m/s^3 to 2m/s^3 (It means you can release the accelerator pedal almost immediately, but you have a limit on increasing the acc value)​
-·       Acc<0 (while braking): -4m/s^3 to +20m/s^2 (it means you can release the brake almost immediately, but there is a limit in applying the brake)​
-
-​Steering Limits:​
-·       Wheel maximum steering: 0.6 Radian (34.3°)​
-·       Maximum steering rate: 0.4 Radian/sec (22.9°/sec)
+# Fields
+- `rec::SceneRecord` A record that will hold the resulting simulation results
+- `mlon::LaneFollowingDriver = IntelligentDriverModel()` Longitudinal driving model
+- `mlat::LateralDriverModel = ProportionalLaneTracker()` Lateral driving model
+- `mlane::LaneChangeModel =RandLaneChanger` Lane change model (randomly)
 """
 
 mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
@@ -174,7 +156,7 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
     # model.δ = -scene[ind_ego].state.posG.θ
     model.δ = 0
     for n = 1 : model.N_sim
-        model.isDebugMode? println("n: ",n) : nothing
+        model.isDebugMode ? println("n: ",n) : nothing
 
         # initialize the vehicle object
         ego_veh = scene[ind_ego] # Entity{VehicleStateBuffer,BicycleModel,Int}
@@ -203,7 +185,7 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
         # evaluate the control sequences
         cost_n = 0
         for ℓ = 1 : N_receding
-            model.isDebugMode? println("ℓ: ", ℓ) : nothing
+            model.isDebugMode ? println("ℓ: ", ℓ) : nothing
             # (1) predict other drivers' motion (SGAN) (for the next step)
             if length(ind_near_vehs) >= 1
                 scene′ = propagate_other_vehs(Any, ind_ego, model, scene′, roadway, rec′)
@@ -211,7 +193,7 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
 
             # (2) update the vehicle states with a,δ
             a,δ = a_[ℓ],δ_[ℓ]
-            model.isDebugMode? println("try a = ",a, ", δ = ", δ) : nothing
+            model.isDebugMode ? println("try a = ",a, ", δ = ", δ) : nothing
             state′ = propagate(ego_veh, AccelSteeringAngle(a,δ), roadway, model.ΔT)
             ego_veh = Entity(state′, ego_veh.def, ego_veh.id)
             scene′[ind_ego] = ego_veh
@@ -248,7 +230,11 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
         end
     end
 
-    model.isDebugMode? println("optimal controls (n = ", n_opt,") : a = ",model.a, ", δ = ", model.δ) : nothing
+    model.isDebugMode ? println("optimal controls (n = ", n_opt,") : a = ",model.a, ", δ = ", model.δ) : nothing
+    if n_opt == -1
+        @warn "No feasible solution found. Maximum braking applied."
+        model.a = max(-scene[ind_ego].state.v/model.ΔT, model.a_min)
+    end
     model
 end
 
@@ -370,11 +356,11 @@ function isSafe(model::MpcSganMonteDriver, ind_ego::Int, ind_others::Vector{Any}
     ego_veh = scene[ind_ego]
     ϵ = model.thred_safety
     for i in ind_others
-        println("distance to vehicle ", i, ": ", min_distance(model, ego_veh, scene[i]))
+        model.isDebugMode ? println("distance to vehicle ", i, ": ", min_distance(model, ego_veh, scene[i])) : nothing
         if min_distance(model, ego_veh, scene[i]) > ϵ
             continue
         else
-            println("   COLISION DETECTED. actions discarded")
+            model.isDebugMode ? println("   COLISION DETECTED. actions discarded") : nothing
             return false
         end
     end
@@ -399,8 +385,6 @@ function min_distance(model::MpcSganMonteDriver,
     # other: other vehicle object
     x,y,θ = ego.state.posG.x, ego.state.posG.y, ego.state.posG.θ
     xᵢ,yᵢ,θᵢ = other.state.posG.x, other.state.posG.y, other.state.posG.θ
-    # x,y,θ = 0,0,0.5
-    # xᵢ,yᵢ,θᵢ = 0,5,0
     h = model.height/2
     w = model.width/2
 
@@ -412,14 +396,6 @@ function min_distance(model::MpcSganMonteDriver,
         @constraint(prob, ((x′-x)*cos(θ) + (y′-y)*sin(θ))^2/(h^2) + ((x′-x)*sin(θ) + (y′-y)*cos(θ))^2/(w^2) <= 1.0)
         @constraint(prob, ((xᵢ′-xᵢ)*cos(θᵢ) + (yᵢ′-yᵢ)*sin(θᵢ))^2/(h^2) + ((xᵢ′-xᵢ)*sin(θᵢ) + (yᵢ′-yᵢ)*cos(θᵢ))^2/(w^2) <= 1.0)
         optimize!(prob)
-        # println(objective_value(prob))
-        # if termination_status(prob) == MOI.OPTIMAL
-        #     return max(sqrt(objective_value(prob)))
-        # elseif (termination_status(prob) == MOI.TIME_LIMIT && has_values(prob))
-        #     return max(sqrt(objective_value(prob)), 0)
-        # else
-        #     return -1
-        # end
         return sqrt(max(objective_value(prob), 0))
     elseif type == "circle"
         return max(sqrt((x-xᵢ)^2+(y-yᵢ)^2)-2*h, 0)
@@ -429,7 +405,3 @@ function min_distance(model::MpcSganMonteDriver,
 end
 
 Base.rand(model::MpcSganMonteDriver) = AccelSteeringAngle(model.a,model.δ)
-# Distributions.pdf(driver::MpcSganMonteDriver, a::AccelSteeringAngle) = pdf(driver.mlat, a.a_lat) * pdf(driver.mlon, a.a_lon)
-# Distributions.logpdf(driver::MpcSganMonteDriver, a::AccelSteeringAngle) = logpdf(driver.mlat, a.a_lat) * logpdf(driver.mlon, a.a_lon)
-
-# end
