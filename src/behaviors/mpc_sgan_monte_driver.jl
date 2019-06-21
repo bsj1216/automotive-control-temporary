@@ -49,13 +49,13 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         δ_min::Float64 = -0.4,
         a_max::Float64 = 3.5,
         a_min::Float64 = -4.0,
-        N_sim::Float64 = 500.0,
+        N_sim::Float64 = 200.0,
         T::Float64 = 0.2,
         ΔT::Float64 = timestep,
         T_obs::Float64 = 2.0,
-        T_pred::Float64 = 2.0,
-        Δa_max::Float64 = 5.0,
-        Δδ_max::Float64 = 0.6,
+        T_pred::Float64 = 1.0,
+        Δa_max::Float64 = 2.0,
+        Δδ_max::Float64 = 0.4,
         λ_v::Float64 = 1.0,
         λ_div::Float64 = 10e2+0.0,
         λ_δ::Float64 = 1.0,
@@ -233,6 +233,9 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
     model.isDebugMode ? println("optimal controls (n = ", n_opt,") : a = ",model.a, ", δ = ", model.δ) : nothing
     if n_opt == -1
         @warn "No feasible solution found. Maximum braking applied."
+    end
+    # prevent the vehicle going backward
+    if scene[ind_ego].state.v + model.ΔT*model.a < 0
         model.a = max(-scene[ind_ego].state.v/model.ΔT, model.a_min)
     end
     model

@@ -16,6 +16,7 @@ mutable struct BafflingDriver <: DriverModel{LatLonAccel}
     mlon::LaneFollowingDriver
     mlat::LateralDriverModel
     mlane::LaneChangeModel
+    ΔT::Float64
 
     function BafflingDriver(
         timestep::Float64;
@@ -31,6 +32,7 @@ mutable struct BafflingDriver <: DriverModel{LatLonAccel}
         retval.mlon = mlon
         retval.mlat = mlat
         retval.mlane = mlane
+        retval.ΔT = timestep
 
         retval
     end

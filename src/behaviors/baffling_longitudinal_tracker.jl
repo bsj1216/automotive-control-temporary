@@ -30,7 +30,7 @@ settings. The output is an longitudinal acceleration. The desired velocity, howe
     a_max::Float64 = 3.0 # maximum acceleration ability [m/s²]
     d_cmf::Float64 = 2.0 # comfortable deceleration [m/s²] (positive)
     d_max::Float64 = 9.0 # maximum deceleration [m/s²] (positive)
-
+    ΔT::Float64 = 0.2 # timestep to simulate [s]
     v_offset::Float64 = 5.0 # offset from the desired speed [m/s]
 end
 get_name(::BafflingLongitudinalTracker) = "BafflingLongitudinalTracker"
@@ -39,19 +39,22 @@ function set_desired_speed!(model::BafflingLongitudinalTracker, v_des::Float64)
     model
 end
 function track_longitudinal!(model::BafflingLongitudinalTracker, v_ego::Float64, v_oth::Float64, headway::Float64)
-
     if !isnan(v_oth)
         @assert !isnan(headway)
         if headway < 0.0
             @debug("BafflingLongitudinalTracker Warning: BDM received a negative headway $headway"*
                   ", a collision may have occured.")
-            model.a = -model.d_max
+            model.a = max(-model.d_max, -v_ego/model.ΔT)
         else
 
             Δv = v_oth - v_ego
             s_des = model.s_min + v_ego*model.T - v_ego*Δv / (2*sqrt(model.a_max*model.d_cmf))
             v_ratio = model.v_des > 0.0 ? (v_ego/model.v_des) : 1.0
             model.a = model.a_max * (1.0 - v_ratio^model.δ - (s_des/headway)^2)
+
+            if v_ego + model.ΔT * model.a < 0
+                model.a = max(-model.d_max, -v_ego/model.ΔT)
+            end
         end
     else
         # no lead vehicle, just drive to match desired speed

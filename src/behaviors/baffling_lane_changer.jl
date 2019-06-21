@@ -45,7 +45,7 @@ mutable struct BafflingLaneChanger <: LaneChangeModel
         threshold_fore::Float64 = 50.0,
         threshold_lane_change_gap_fore::Float64 = 5.0,
         threshold_lane_change_gap_rear::Float64 = 5.0,
-        threshold_lane_change_rand::Float64 = 0.2,
+        threshold_lane_change_rand::Float64 = 0.00,
         dir::Int=DIR_MIDDLE,
         )
 
