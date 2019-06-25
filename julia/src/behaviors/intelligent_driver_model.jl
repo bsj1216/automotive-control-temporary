@@ -50,26 +50,21 @@ function track_longitudinal!(model::IntelligentDriverModel, v_ego::Float64, v_ot
             # model.a = -model.d_max
             model.a = max(-model.d_max, -v_ego/model.ΔT)
         else
-
             Δv = v_oth - v_ego
             s_des = model.s_min + v_ego*model.T - v_ego*Δv / (2*sqrt(model.a_max*model.d_cmf))
             v_ratio = model.v_des > 0.0 ? (v_ego/model.v_des) : 1.0
             model.a = model.a_max * (1.0 - v_ratio^model.δ - (s_des/headway)^2)
-            if v_ego + model.ΔT * model.a < 0
-                model.a = max(-model.d_max, -v_ego/model.ΔT)
-            end
         end
     else
         # no lead vehicle, just drive to match desired speed
         Δv = model.v_des - v_ego
         model.a = Δv*model.k_spd # predicted accel to match target speed
-        if v_ego + model.ΔT * model.a < 0
-            model.a = max(-model.d_max, -v_ego/model.ΔT)
-        end
     end
 
     @assert !isnan(model.a)
-
+    if v_ego + model.ΔT * model.a < 0
+        model.a = max(-model.d_max, -v_ego/model.ΔT)
+    end
     model.a = clamp(model.a, -model.d_max, model.a_max)
 
     return model

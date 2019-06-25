@@ -2,17 +2,19 @@ using AutoViz
 using Distributions
 using Interact
 using AutomotiveDrivingModels
+using Dates
 
 roadway = gen_stadium_roadway(3)
 timestep = 0.2
 scene = Scene()
+nticks = 5
 
 # ==========================
 # Generate Vehicles
 # ==========================
-n_vehs_top = 6; origin_top = 3.0;
-n_vehs_middle = 7; origin_middle = 3.0;
-n_vehs_bottom = 6; origin_bottom = 3.0;
+n_vehs_top = 2; origin_top = 3.0;
+n_vehs_middle = 3; origin_middle = 3.0;
+n_vehs_bottom = 2; origin_bottom = 3.0;
 n_vehs_tot = n_vehs_top + n_vehs_middle + n_vehs_bottom
 dist_betw_cars = 6.0
 global num_vehs = 0
@@ -66,8 +68,9 @@ models = Dict{Int, DriverModel}()
 for j in 1:num_vehs
     if j == ind_ego
         models[j] = MpcSganMonteDriver(timestep,
-                                        N_sim = 300.0,
-                                        T=1.2,
+                                        n_ticks = nticks+1,
+                                        N_sim = 5.0,
+                                        T=0.4,
                                         λ_div=5000.0,
                                         λ_v=1.0,
                                         λ_δ=1000.0,
@@ -80,7 +83,8 @@ for j in 1:num_vehs
                                         Δδ_max = 0.2,
                                         width = 2.0,
                                         height = 4.2,
-                                        thred_safety = 1.3)
+                                        thred_safety = 1.3,
+                                        isDebugMode = true)
     else
         models[j] = IntelligentDriverModel()
     end
@@ -110,16 +114,10 @@ cam = FitToContentCamera()
 
 
 # ==========================
-# Run simulation and rendering
+# Run simulation
 # ==========================
-nticks = 120
 rec = SceneRecord(nticks+1, timestep)
 simulate!(rec, scene, roadway, models, nticks)
-render(rec[0], roadway, cam=cam, car_colors=car_colors)
-
-@manipulate for frame_index in 1:nframes(rec)
-    render(rec[frame_index-nframes(rec)],roadway,cam=cam,car_colors=car_colors)
-end
 
 
 # ===========================
@@ -129,3 +127,11 @@ using JLD
 JLD.save("../sim_records/$(Dates.DateTime(Dates.now()))_N$(trunc(Int,models[ind_ego].N_sim))_tick$(nticks)_vehs$(n_vehs_tot)_Nhorz$(trunc(Int,round(models[ind_ego].T/timestep))).jld",
     "rec", rec, "roadway", roadway, "cam", cam,
     "colors", car_colors, "ind", ind_ego)
+
+# ===========================
+# Rendering
+# ===========================
+render(rec[0], roadway, cam=cam, car_colors=car_colors)
+@manipulate for frame_index in 1:nframes(rec)
+    render(rec[frame_index-nframes(rec)],roadway,cam=cam,car_colors=car_colors)
+end

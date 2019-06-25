@@ -15,6 +15,7 @@ BafflingDriver(timestep::Float64;mlon::LaneFollowingDriver=IntelligentDriverMode
 
 mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
     rec::SceneRecord
+    n_ticks::Integer
     mlane::LaneChangeModel
     δ_max::Float64
     δ_min::Float64
@@ -23,6 +24,7 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
     N_sim::Float64
     T::Float64
     ΔT::Float64
+    T_obs_given::Float64
     T_obs::Float64
     T_pred::Float64
     Δa_max::Float64
@@ -41,14 +43,16 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
     models::Dict{Int, DriverModel}
     thred_safety::Float64
     isDebugMode::Bool
+    pred_model_type::AbstractString  # {"sgan", "perfect"}
     predictor::Any
     sgan_path::AbstractString
     sgan_model_path::AbstractString
 
     function MpcSganMonteDriver(
         timestep::Float64;
+        n_ticks::Integer = 5,
         mlane::LaneChangeModel= BafflingLaneChanger(timestep),
-        rec::SceneRecord = SceneRecord(1, timestep),
+        rec::SceneRecord = SceneRecord(n_ticks, timestep),
         δ_max::Float64 = 0.6,
         δ_min::Float64 = -0.4,
         a_max::Float64 = 3.5,
@@ -56,7 +60,8 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         N_sim::Float64 = 200.0,
         T::Float64 = 0.2,
         ΔT::Float64 = timestep,
-        T_obs::Float64 = 2.0,
+        T_obs::Float64 = 1.0,
+        T_obs_given::Float64 = T_obs,
         T_pred::Float64 = 1.0,
         Δa_max::Float64 = 2.0,
         Δδ_max::Float64 = 0.4,
@@ -71,7 +76,8 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         v_des::Float64 = 30.0,
         thred_safety::Float64 = 0.5,
         isDebugMode::Bool = false,
-        sgan_path::AbstractString = "/home/sbae/automotive-control-temporary/python/nnmpc/sgan"
+        pred_model_type::AbstractString = "sgan",
+        sgan_path::AbstractString = "/home/sbae/automotive-control-temporary/python/nnmpc/sgan",
         sgan_model_path::AbstractString = "/home/sbae/automotive-control-temporary/python/nnmpc/sgan/models/sgan-models/eth_8_model.pt")
 
         retval = new()
@@ -90,6 +96,7 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         retval.T = T
         retval.ΔT = ΔT
         retval.T_obs = T_obs
+        retval.T_obs_given = T_obs_given
         retval.T_pred = T_pred
         retval.Δa_max = Δa_max
         retval.Δδ_max = Δδ_max
@@ -108,6 +115,7 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         retval.thred_safety = thred_safety
         retval.isDebugMode = isDebugMode
         retval.predictor = predictor
+        retval.pred_model_type = pred_model_type
 
         retval
     end
@@ -124,6 +132,45 @@ function set_other_models!(model::MpcSganMonteDriver, models::Dict{Int, DriverMo
     model
 end
 
+
+"""
+    compute_longitudinal_acceleration(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, egoid::Int)
+
+"""
+function compute_longitudinal_acceleration(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, egoid::Int)
+    # local variables -- from IDM
+    k_spd = 1.0 # proportional constant for speed tracking when in freeflow [s⁻¹]
+    δ = 4.0 # acceleration exponent [-]
+    T = 1.5 # desired time headway [s]
+    # v_des = 29.0 # desired speed [m/s]
+    s_min = 5.0 # minimum acceptable gap [m]
+    a_max = 3.0 # maximum acceleration ability [m/s²]
+    d_cmf = 2.0 # comfortable deceleration [m/s²] (positive)
+    d_max = 9.0 # maximum deceleration [m/s²] (positive)
+    ΔT = 0.2 # timestep to simulate [s]
+    v_offset = 5.0 # offset from the desired speed [m/s]
+
+    fore = get_neighbor_fore_along_lane(scene, ind_ego, roadway, VehicleTargetPointFront(), VehicleTargetPointRear(), VehicleTargetPointFront())
+    v_ego = scene[ind_ego].state.v
+    headway, v_oth = fore.Δs, scene[fore.ind].state.v
+    if !isnan(v_oth)
+        Δv = v_oth - v_ego
+        s_des = s_min + v_ego*T - v_ego*Δv / (2*sqrt(model.a_max*abs(model.a_min))
+        v_ratio = model.v_des > 0.0 ? (v_ego/model.v_des) : 1.0
+        a = model.a_max * (1.0 - v_ratio^δ - (s_des/headway)^2)
+    else
+        # no lead vehicle, just drive to match desired speed
+        Δv = model.v_des - v_ego
+        model.a = Δv*k_spd # predicted accel to match target speed
+    end
+
+    if v_ego + model.ΔT * a < 0
+        a = max(model.a_min, -v_ego/model.ΔT)
+    end
+
+    return a
+end
+
 """
     observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, egoid::Int)
 
@@ -135,37 +182,40 @@ end
 """
 function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, egoid::Int)
     # δ_max,δ_min,a_max,a_min,N_sim,T,ΔT,T_obs,T_pred,Δa_max,Δδ_max=0.6,-0.4,3.0,-3.0,1000,4,0.5,2,2,5,0.6
+    ind_ego = findfirst(egoid, scene)
+    lane_change_action = rand(model.mlane)
 
     update!(model.rec, scene)
     observe!(model.mlane, scene, roadway, egoid) # receive lane change action from higher level decision maker
     # global y_ref = DEFAULT_LANE_WIDTH * lane_change_action.dir
     global y_ref = -1*DEFAULT_LANE_WIDTH
 
-    # check how many simulated steps we have
-    n_steps = 0
-    for t in 1 : model.rec.nframes
-        n_steps += 1
-        if length(model.rec.frames[t]) == 0
-            break
-        end
-    end
-    model.T_obs = trunc(Int, min(n_steps*model.ΔT, model.T_obs))
+    # check if we have enough dataset to use SGAN
+    isSganDataReady = model.rec.nframes*model.ΔT < model.T_obs_given
+    model.isDebugMode ? println("isSganDataReady: ", isSganDataReady)
 
-    # Local variables
+    # if sgan data is not ready, then it just keeps the lane
+    if !isSganDataReady
+        model.a = compute_longitudinal_acceleration(model, scene, roadway, ind_ego)
+        model.δ = 0
+        return model
+    end
+
+    model.T_obs = min(model.rec.nframes*model.ΔT, model.T_obs_given)
+    model.isDebugMode ? println("T_obs: ", model.T_obs) : nothing
+
+    # local variables
     N_receding = trunc(Int, model.T/model.ΔT)
     N_sgan_obs = trunc(Int, model.T_obs/model.ΔT)
     N_sgan_pred = trunc(Int, model.T_pred/model.ΔT)
-    ind_ego = findfirst(egoid, scene)
-    lane_change_action = rand(model.mlane)
 
     # generate sequences of control inputs
     a_seq, δ_seq = gen_rand_inputs(model, y_ref)
 
     cost_min = Inf
-    n_opt = -1
-    model.a = model.a_min
-    # model.δ = -scene[ind_ego].state.posG.θ
-    model.δ = 0
+    n_opt = -1            # index of the optimal sequence of the controls
+    model.a = model.a_min # maximum braking by default
+    model.δ = 0           # zero steering by default
     for n = 1 : model.N_sim
         model.isDebugMode ? println("n: ",n) : nothing
 
@@ -174,13 +224,11 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
 
         # initialize the vehicle object for the other vehicles
         ind_near_vehs = get_indices_near_vehs(ind_ego, scene, 15.0)
-        # println(ind_near_vehs)
-        # print(ind_near_vehs)
 
         # initialize the record scene queue
         rec′ = SceneRecord(N_receding, model.ΔT)
         for k = 1 : N_sgan_obs
-            update!(rec′,rec[-N_sgan_obs + k])
+            update!(rec′,model.rec[-N_sgan_obs + k])
         end
 
         # randomly sample the sequence of control
@@ -199,7 +247,17 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
             model.isDebugMode ? println("ℓ: ", ℓ) : nothing
             # (1) predict other drivers' motion (SGAN) (for the next step)
             if length(ind_near_vehs) >= 1
-                scene′ = propagate_other_vehs(Any, ind_ego, model, scene′, roadway, rec′)
+                if model.pred_model_type == "perfect"
+                    scene′ = propagate_other_vehs(Any, model, ind_ego, scene′, roadway, rec′)
+                elseif model.pred_model_type == "sgan"
+                    if isSganDataReady
+                        scene′ = predict(model, ind_ego, ind_near_vehs, scene′, roadway, rec′)
+                    else
+
+                    end
+                else
+                    error("ERROR: prediction model type error. It must be either {perfect} (benchmark) or {sgan}")
+                end
             end
 
             # (2) update the vehicle states with a,δ
@@ -273,7 +331,6 @@ function get_indices_near_vehs(ind_ego::Int, scene::Scene, range::Float64)
             append!(ind_near_vehs, i)
         end
     end
-
     return ind_near_vehs
 end
 
@@ -323,7 +380,7 @@ end
     function propagate(model::MpcSganMonteDriver, ind_near_vehs::Vector{Any}, rec::SceneRecord)
 returns positions of the neighboring vehicles, based on their Driver Model. This is equivalent to the SGAN that is perfectly trained.
 """
-function propagate_other_vehs(::Type{A}, ind_ego::Int, model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, rec::SceneRecord) where {A}
+function propagate_other_vehs(::Type{A}, model::MpcSganMonteDriver, ind_ego::Int, scene::Scene, roadway::Roadway, rec::SceneRecord) where {A}
     models = Dict{Int, DriverModel}()
     for i in 1 : length(model.models)
         if i == ind_ego
@@ -341,23 +398,74 @@ end
 
 
 """
-    predict(vehs::Array{Entity{VehicleState, D, Int}}) where {D}
+    predict(model::MpcSganMonteDriver, ind_ego::Integer, ind_near_vehs::Vector{Any}, scene::Scene, roadway::Roadway, rec::SceneRecord)
 predicts motions of all vehicles within a range, using Social GAN.
 """
-function predict(model::MpcSganMonteDriver, ind_near_vehs::Vector{Any}, rec::SceneRecord)
-    # TODO: call SGAN function to predict
-
+function predict(model::MpcSganMonteDriver, ind_ego::Integer, ind_near_vehs::Vector{Any}, scene::Scene, roadway::Roadway, rec::SceneRecord)
     # arrange input for SGAN
-    inp = []
-    for vehᵢ in vehs # other vehicles
-        pos = [(vehᵢ.state.buffer[k].posG.x, vehᵢ.state.buffer[k].posG.y) for k in 1:length(vehᵢ.state.buffer)]
-        inp = [inp reshape(pos,length(vehᵢ.state.buffer),1)]
+    # example:
+    # obs_traj = [  [ 1,  1.000e+00,  8.460e+00,  3.590e+00],
+    #           [ 1,  2.000e+00,  1.364e+01,  5.800e+00],
+    #           [ 2,  1.000e+00,  9.570e+00,  3.790e+00],
+    #           [ 2,  2.000e+00,  1.364e+01,  5.800e+00],
+    #           [ 3,  1.000e+00,  1.067e+01,  3.990e+00],
+    #           [ 3,  2.000e+00,  1.364e+01,  5.800e+00],
+    #           [ 4,  1.000e+00,  1.173e+01,  4.320e+00],
+    #           [ 4,  2.000e+00,  1.209e+01,  5.750e+00],
+    #           [ 5,  1.000e+00,  1.281e+01,  4.610e+00],
+    #           [ 5,  2.000e+00,  1.137e+01,  5.800e+00],
+    #           [ 6,  1.000e+00,  1.281e+01,  4.610e+00],
+    #           [ 6,  2.000e+00,  1.031e+01,  5.970e+00],
+    #           [ 7,  1.000e+00,  1.194e+01,  6.770e+00],
+    #           [ 7,  2.000e+00,  9.570e+00,  6.240e+00],
+    #           [ 8,  1.000e+00,  1.103e+01,  6.840e+00],
+    #           [ 8,  2.000e+00,  8.730e+00,  6.340e+00]]
+
+    N_obs = trunc(Int, round(model.T_obs/model.ΔT))
+    N_vehs = length(ind_near_vehs)
+    model.isDebugMode ? println("N_vehs: ",N_vehs) : nothing
+
+    # bulid the input matrix for sgan
+    obs_traj = []
+    for seq in 1 : N_obs # sequence
+        for i in 1 : N_vehs + 1 # vehicles
+            ind = i == 1 ? ind_ego : ind_near_vehs[i-1]
+            veh = rec[0-(N_obs-1)+(seq-1)][ind]
+            l = [seq, i, veh.state.posG.x, veh.state.posG.y]
+            obs_traj = [obs_traj;[l]]
+        end
+    end
+
+    if model.isDebugMode
+        for i in 1:length(obs_traj)
+              println(obs_traj[i])
+        end
     end
 
     # call SGAN and return the predicted positions
-    out = model.predictor.predict(inp)
+    next_pred_traj = model.predictor.predict(obs_traj)
+    if model.isDebugMode
+        for i in 1:size(next_pred_traj,1)
+              println(next_pred_traj[i,:])
+        end
+    end
 
-    # TODO: update vehicle object with the predicted positions
+    # update the scene with the predicted positions
+    for i in 1 : N_vehs + 1
+        ind = i == 1 ? ind_ego : ind_near_vehs[i-1]
+        veh = scene[ind]
+
+        x′ = next_pred_traj[i,1]; x_diff = x′-veh.state.posG.x
+        y′ = next_pred_traj[i,2]; y_diff = y′-veh.state.posG.y
+        θ′ = atan(y_diff/x_diff)
+        v′ = sqrt(x_diff^2+y_diff^2)/model.ΔT
+
+        posG = VecSE2(x′, y′, θ′)
+        state′  = VehicleState(posG, roadway, v′)
+
+        scene[ind] = Entity(state′, veh.def, veh.id)
+    end
+
     return scene
 end
 
