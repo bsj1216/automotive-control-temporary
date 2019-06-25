@@ -11,6 +11,7 @@ BafflingDriver(timestep::Float64;mlon::LaneFollowingDriver=IntelligentDriverMode
 - `mlat::LateralDriverModel = ProportionalLaneTracker()` Lateral driving model
 - `mlane::LaneChangeModel =RandLaneChanger` Lane change model (randomly)
 """
+# using PyCall
 
 mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
     rec::SceneRecord
@@ -40,6 +41,9 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
     models::Dict{Int, DriverModel}
     thred_safety::Float64
     isDebugMode::Bool
+    predictor::Any
+    sgan_path::AbstractString
+    sgan_model_path::AbstractString
 
     function MpcSganMonteDriver(
         timestep::Float64;
@@ -66,9 +70,15 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         width::Float64 = 1.8,
         v_des::Float64 = 30.0,
         thred_safety::Float64 = 0.5,
-        isDebugMode::Bool = false)
+        isDebugMode::Bool = false,
+        sgan_path::AbstractString = "/home/sbae/automotive-control-temporary/python/nnmpc/sgan"
+        sgan_model_path::AbstractString = "/home/sbae/automotive-control-temporary/python/nnmpc/sgan/models/sgan-models/eth_8_model.pt")
 
         retval = new()
+
+        pushfirst!(PyVector(pyimport("sys")."path"),sgan_path)
+        sganPredictor = pyimport("sgan.predictor")
+        predictor = sganPredictor.Predictor(sgan_model_path)
 
         retval.rec = rec
         retval.mlane = mlane
@@ -97,6 +107,7 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         retval.models = Dict{Int64,DriverModel}()
         retval.thred_safety = thred_safety
         retval.isDebugMode = isDebugMode
+        retval.predictor = predictor
 
         retval
     end
@@ -344,7 +355,7 @@ function predict(model::MpcSganMonteDriver, ind_near_vehs::Vector{Any}, rec::Sce
     end
 
     # call SGAN and return the predicted positions
-    # out = CALL_SGAN_FUNCTION(inp)
+    out = model.predictor.predict(inp)
 
     # TODO: update vehicle object with the predicted positions
     return scene

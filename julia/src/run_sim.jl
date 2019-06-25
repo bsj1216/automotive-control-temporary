@@ -11,7 +11,7 @@ scene = Scene()
 # Generate Vehicles
 # ==========================
 n_vehs_top = 6; origin_top = 3.0;
-n_vehs_middle = 7; origin_middle = 0.0;
+n_vehs_middle = 7; origin_middle = 3.0;
 n_vehs_bottom = 6; origin_bottom = 3.0;
 n_vehs_tot = n_vehs_top + n_vehs_middle + n_vehs_bottom
 dist_betw_cars = 6.0
