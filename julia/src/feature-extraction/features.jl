@@ -54,7 +54,7 @@ function Base.get(::Feature_AngularRateF, rec::EntityQueueRecord{S,D,I}, roadway
     _get_feature_derivative_backwards(TURNRATEF, rec, roadway, vehicle_index, pastframe)
 end
 generate_feature_functions("DesiredAngle", :desang, Float64, "rad")
-function Base.get(::Feature_DesiredAngle, rec::EntityQueueRecord{S,D,I}, roadway::R, vehicle_index::Int, pastframe::Int=0; 
+function Base.get(::Feature_DesiredAngle, rec::EntityQueueRecord{S,D,I}, roadway::R, vehicle_index::Int, pastframe::Int=0;
     kp_desired_angle::Float64 = 1.0,
     ) where {S<:VehicleState,D,I,R}
 
