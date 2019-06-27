@@ -48,6 +48,7 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
     sgan_path::AbstractString
     sgan_model_path::AbstractString
     lane_change_action::LaneChangeChoice
+    temp_frame_count::Integer
 
     function MpcSganMonteDriver(
         timestep::Float64;
@@ -119,6 +120,7 @@ mutable struct MpcSganMonteDriver <: DriverModel{AccelSteeringAngle}
         retval.predictor = predictor
         retval.pred_model_type = pred_model_type
         retval.lane_change_action = lane_change_action
+        retval.temp_frame_count = 0
 
         retval
     end
@@ -208,6 +210,25 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
         return model
     end
 
+    # ============== TEMP: test================
+    if model.lane_change_action.dir == DIR_MIDDLE
+        if model.temp_frame_count == 10
+            model.temp_frame_count = 0
+
+            left_lane_exists = convert(Float64, get(N_LANE_LEFT, model.rec, roadway, ind_ego)) > 0
+            right_lane_exists = convert(Float64, get(N_LANE_RIGHT, model.rec, roadway, ind_ego)) > 0
+
+            if left_lane_exists
+                model.lane_change_action = LaneChangeChoice(DIR_LEFT)
+            elseif right_lane_exists
+                model.lane_change_action = LaneChangeChoice(DIR_RIGHT)
+            end
+        else
+            model.temp_frame_count += 1
+        end
+
+    end
+    # =========================================
     lane_offset = get_lane_offset(model.lane_change_action, model.rec, roadway, ind_ego)
     if model.lane_change_action.dir == DIR_MIDDLE
         println("keeping lane")
@@ -216,10 +237,6 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
     else
         println("turning to right lane")
     end
-
-    #
-    # model.T_obs = min(model.rec.nframes*model.ΔT, model.T_obs_given)
-    # model.isDebugMode ? println("T_obs: ", model.T_obs) : nothing
 
     # local variables
     N_receding = trunc(Int, round(model.T/model.ΔT))
@@ -269,7 +286,7 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
             # (1) predict other drivers' motion (SGAN) (for the next step)
             if length(ind_near_vehs) >= 1
                 if model.pred_model_type == "perfect"
-                    scene′ = propagate_other_vehs(Any, model, ind_ego, scene′, roadway, rec′)
+                    scene′ = propagate_other_vehs(Any, model, ind_ego, ind_near_vehs, scene′, roadway, rec′)
                 elseif model.pred_model_type == "sgan"
                     scene′ = predict(model, ind_ego, ind_near_vehs, scene′, roadway, rec′)
                 else
@@ -337,7 +354,6 @@ function observe!(model::MpcSganMonteDriver, scene::Scene, roadway::Roadway, ego
     #     && sign(state′.posF.ϕ) != sign(lane_offset))
     if abs(lane_offset + state′.v*sin(state′.posF.ϕ)*model.ΔT) <= DEFAULT_LANE_WIDTH/2
         model.lane_change_action = LaneChangeChoice(DIR_MIDDLE)
-
     end
 
     model
@@ -413,7 +429,7 @@ end
     function propagate(model::MpcSganMonteDriver, ind_near_vehs::Vector{Any}, rec::SceneRecord)
 returns positions of the neighboring vehicles, based on their Driver Model. This is equivalent to the SGAN that is perfectly trained.
 """
-function propagate_other_vehs(::Type{A}, model::MpcSganMonteDriver, ind_ego::Int, scene::Scene, roadway::Roadway, rec::SceneRecord) where {A}
+function propagate_other_vehs(::Type{A}, model::MpcSganMonteDriver, ind_ego::Int, ind_near_vehs::Vector{Any}, scene::Scene, roadway::Roadway, rec::SceneRecord) where {A}
     models = Dict{Int, DriverModel}()
     for i in 1 : length(model.models)
         if i == ind_ego

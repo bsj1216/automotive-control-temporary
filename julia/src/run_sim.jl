@@ -12,9 +12,9 @@ scene = Scene()
 # ==========================
 # Generate Vehicles
 # ==========================
-n_vehs_top = 3; origin_top = 3.0;
-n_vehs_middle = 4; origin_middle = 0.0;
-n_vehs_bottom = 3; origin_bottom = 3.0;
+n_vehs_top = 17; origin_top = 3.0;
+n_vehs_middle = 18; origin_middle = 0.0;
+n_vehs_bottom = 17; origin_bottom = 3.0;
 n_vehs_tot = n_vehs_top + n_vehs_middle + n_vehs_bottom
 dist_betw_cars = 6.0
 global num_vehs = 0
@@ -63,8 +63,9 @@ end
 # ==========================
 # Assign Driver models
 # ==========================
-nticks = 100
-ind_ego = n_vehs_top+2
+nticks = 1000
+pred_model_type = "perfect" # {sgan, perfect}
+ind_ego = n_vehs_top+1
 models = Dict{Int, DriverModel}()
 for j in 1:num_vehs
     if j == ind_ego
@@ -86,8 +87,9 @@ for j in 1:num_vehs
                                         height = 4.2,
                                         T_obs = 1.6,
                                         thred_safety = 1.3,
+                                        pred_model_type = pred_model_type,
                                         isDebugMode = false,
-                                        lane_change_action = LaneChangeChoice(DIR_LEFT)
+                                        lane_change_action = LaneChangeChoice(DIR_MIDDLE)
                                         )
     else
         models[j] = IntelligentDriverModel()
@@ -128,7 +130,7 @@ simulate!(rec, scene, roadway, models, nticks)
 # Store the variables
 # ===========================
 using JLD
-JLD.save("../sim_records/$(Dates.DateTime(Dates.now()))_N$(trunc(Int,models[ind_ego].N_sim))_tick$(nticks)_vehs$(n_vehs_tot)_Nhorz$(trunc(Int,round(models[ind_ego].T/timestep))).jld",
+JLD.save("../sim_records/$(Dates.DateTime(Dates.now()))_N$(trunc(Int,models[ind_ego].N_sim))_tick$(nticks)_vehs$(n_vehs_tot)_Nhorz$(trunc(Int,round(models[ind_ego].T/timestep)))_pred$(pred_model_type).jld",
     "rec", rec, "roadway", roadway, "cam", cam,
     "colors", car_colors, "ind", ind_ego)
 
